@@ -1,0 +1,358 @@
+---
+title: "Predicting"
+author: "Varun Boodram"
+date: "October 22, 2014"
+output: html_document
+---
+
+### Predicting with Regression
+
+While easy to implement and interpret, regression can have poor performance in non-linear settings
+
+Data obtention, splitting, exploratory data analysis
+```{r}
+library(caret)
+data(faithful)
+set.seed(333)
+inTrain<-createDataPartition(y = faithful$waiting, p = 0.5, list = F)
+trainFaith<-faithful[inTrain, ]
+testFaith<-faithful[-inTrain, ]
+head(trainFaith)
+plot(x = trainFaith$waiting, y = trainFaith$eruptions, pch=19, col="blue", xlab="Waiting", ylab="Duration")
+```
+
+Building the linear model
+```{r}
+# fit linear model
+lm1<-lm(formula = eruptions ~ waiting, data = trainFaith)
+summary(lm1)
+
+plot(x = trainFaith$waiting, y = trainFaith$eruptions, pch=19, col="blue", xlab="Waiting", ylab="Duration")
+lines(x = trainFaith$waiting, lm1$fitted, lwd=3, col="red")
+```
+
+Predicting a new value
+
+```{r}
+newdata<-data.frame(waiting=80)
+predict(object = lm1, newdata = newdata)
+```
+
+Plotting predictions on the training and test sets
+```{r}
+par(mfrow=c(1,2))
+plot(x = trainFaith$waiting,
+     y = trainFaith$eruptions, 
+     xlab = "Waiting", 
+     ylab = "Duration", 
+     main = "Training Data", 
+     pch=19, col="blue")
+lines(x = trainFaith$waiting, 
+      y = predict(object = lm1), 
+      lwd=3, col="red")
+plot(x = testFaith$waiting, 
+     y = testFaith$eruptions, 
+     xlab = "Waiting", 
+     ylab = "Duration", 
+     main = "Testing Data", 
+     pch=19, col="blue")
+lines(x = testFaith$waiting, 
+      y = predict(object = lm1, newdata = testFaith), 
+      lwd=3, col="red")
+```
+
+Get the training and test set errors
+
+```{r}
+# get root mean squared error on the training set
+sqrt(
+        sum(
+                (lm1$fitted-trainFaith$eruptions)^2
+                )
+        )
+# get root mean squared error on the training set
+sqrt(
+        sum(
+                (predict(object = lm1, newdata = testFaith)-testFaith$eruptions)^2
+                )
+        )
+```
+
+Get Prediction Intervals
+```{r}
+pred1<-predict(object = lm1, newdata = testFaith, interval = "prediction")
+# order the values for the test data set 
+ord<-order(testFaith$waiting)
+plot(x = testFaith$waiting, y = testFaith$eruptions, pch=19, col= "blue")
+# plot confidence intervals
+matlines(x = testFaith$waiting[ord], pred1[ord, ], type = "l", lwd=3)
+```
+
+Doing it all in caret
+```{r}
+modFit<-train(eruptions ~ waiting, data = trainFaith, method = "lm")
+summary(modFit$finalModel)
+```
+
+### Predicting with regression, multiple covariates
+
+Data obtention, splitting and exda
+```{r}
+library(ISLR)
+library(ggplot2)
+data(Wage)
+#subset the data set to the part that isn't the variable that we're trying to predict
+Wage<-subset(Wage, select = -c(logwage))
+summary(Wage)
+inTrain<-createDataPartition(y = Wage$wage, p = 0.7, list=F)
+training<-Wage[inTrain, ]
+testing<-Wage[-inTrain, ]
+c(dim(training), dim(testing))
+
+# view feature plot
+featurePlot(x = training[,c("age", "education", "jobclass")], y = training$wage, plot = "pairs")
+
+# more exda plots
+qplot(x = age, y = wage, data = training, color= jobclass)
+qplot(x = age, y = wage, data = training, color= factor(education))
+```
+
+Fitting a multicovariate linear relationship 
+```{r}
+modFit<-train(wage ~ age + jobclass + education, method = "lm", data = training)
+finMod<-modFit$finalModel
+finMod
+```
+
+Diagnostics
+
+```{r}
+#residuals vs fitted
+plot(x = finMod, 1)
+# colour by vaules not used in the model, to make sure that these are all on the 0 line
+qplot(x = finMod$fitted, finMod$residuals, colour=race, data=training)
+# Very important!!! Plot by index
+plot(x = finMod$residuals, pch=19)
+```
+Plotting the fitted residuals versus the index shows the high residuals at the right, and you can also see a trend wrt the row numbers. **Whenever you see a trend with respect to row numbers, it suggest that there is a varaible missing from your model!!**
+
+```{r}
+ # plot predicted vs truth in test set. ideally they should be close
+pred<-predict(object = modFit, newdata = testing)
+qplot(x = wage, y = pred, colour=year, data = testing)
+```
+
+### Predicting with trees
+
+The basic idea: if you have a bunch of variables that you want to use to predict an outcome, you can take each of those variables and use them to split the outcome into different groups. Then, you can evaluate the homogeneity of each group, and continue to seperate into groups until the groups are homogeneous enough, or small enough, to stop. While this approach is easy to interpret, and gives better performance in non-linear settings, without pruning or cross validatation, it can lead to uncertainty, which is harder to estimate, and the results may be variable.
+
+Basic algorithm:
+
+1. Start with all the variables in one big group
+2. Find the variable or split that best seperates the outcomes
+3. Divide the data into two _leaves_ on that split, or _node_
+4. Within in leaf, find the variable that best seperates the outcome
+5. repeat until the groups are too small or sufficiently pure
+
+Example: Predicting the species with the other variables in the Iris data set
+
+As always, begin with data obtention, splitting and exda
+```{r}
+data(iris)
+names(iris)
+table(iris$Species)
+set.seed(333)
+inTrain<-createDataPartition(y = iris$Species, p = 0.7, list=F)
+training<-iris[inTrain, ]
+testing<-iris[-inTrain, ]
+c(dim(training), dim(testing))
+```
+
+Look for clusters. Note that a linear model may not be appropriate here
+```{r}
+qplot(x = Petal.Width, y = Sepal.Width, data = training, colour = Species)
+```
+
+You do not have to implement the tree prediction algorithm. Simply call the method "rpart"
+```{r}
+modFit<-train(Species ~., method = "rpart", data = training)
+modFit$finalModel
+```
+
+Interpreting results: The final model tells you what all the nodes are, how they are split, and the probability of being in each class. For example, in the second line, ```Petal.Length<2.6```, all of the examples with a petal length of 2.6 belong to the species Setosa. 
+
+Plotting the tree
+```{r}
+plot(x = modFit$finalModel, uniform = T, main = "Classification Tree")
+text(modFit$finalModel, use.n=T, all =T, cex= 0.8)
+```
+
+A prettier plot
+```{r}
+require(rattle)
+fancyRpartPlot(modFit$finalModel)
+```
+
+Remember, ultimately we need to predict values. Use predict()
+```{r}
+predict(object = modFit, newdata = testing)
+```
+
+### Bagging (bootstrap aggregating)
+
+The basic idea is that when you fit complicated models, when you average those models together, you get a smoother fit that gives you a better balance between balance in your fit and bias.
+
+1. Take respamples of the data set, and recalculate predictions.
+2. Average the predictions or majority vote
+
+This leads to a similar bias from fitting any one of those model individually, but a reduced variability, because you have averaged those models together. This is most useful for non-linear functions
+
+example: Predicting temperature as a function of ozone
+```{r}
+library(ElemStatLearn)
+data(ozone, package = "ElemStatLearn")
+ozone<-ozone[order(ozone$ozone),]
+head(ozone)
+```
+
+The procedure is as follows: 
+Build a bootstrap sample of the data set (ten times), and use this to build a new data set called ozone0, and fit a loess (type of smooth curve) relating temperature to the ozone, wtih a common span. Then predict for every single loess curve an outcome for a new data set for the exact same values. 
+
+```{r}
+# construct a matrix to store predictions
+ll<-matrix(NA, nrow = 10, ncol = 155)
+for (i in (1:nrow(ll))){
+        # sample from the oxone data set with replcaement
+        ss<-sample(1:dim(ozone)[1], replace = T)
+        # assign the sample to a new data set 
+        ozone0<-ozone[ss,]
+        # order by ozone variable 
+        ozone0<-ozone0[order(ozone0$ozone),]
+        # fit loess
+        loess0<-loess(formula = temperature ~ ozone, data = ozone0, span = 0.2)
+        # predict and assign
+        ll[i,]<-predict(object = loess0, newdata = data.frame(ozone[1:155,]))
+}
+```
+
+Visualization and interpretation
+
+```{r}
+# plot points
+plot(x = ozone$ozone, y = ozone$temperature, pch =19, cex =0.5)
+```
+
+We want to show the fit with one resampled data set. These are given by the grey lines below
+```{r}
+plot(x = ozone$ozone, y = ozone$temperature, pch =19, cex =0.5)
+# construct fits
+for (i in (1:10)){lines(1:155, ll[i,], col="grey", lwd=2)}
+# add fits to plot
+lines(x = 1:155, apply(ll, 2, mean), col ="red", lwd=2)
+```
+
+The red line is the bagges loess curve.
+
+Bagging in carret is accomplished by setting the method to be bagEarth, treebag, or bagFDA, or you can build your own bagging function. 
+
+example: bagging from regression trees
+
+Take your predictor variable an put it into one data frame. 
+
+```{r}
+predictors<-data.frame(ozone=ozone$ozone)
+head(predictors)
+```
+
+Then, obtain the outcome variable
+
+```{r}
+temperature<-ozone$temperature
+```
+
+Pass these as arguments to the bag() function in the caret package, with the number of subsamples B, and the list of options you want for how to fit the model in bagcontrol
+```{r}
+treebag<-bag(x = predictors, 
+             y = temperature, B = 10, 
+             bagControl = bagControl(fit = ctreeBag$fit, 
+                                     predict = ctreeBag$pred, 
+                                     aggregate = ctreeBag$aggregate))
+```
+
+
+```{r}
+plot(ozone$ozone, ozone$temperature, col="lightgrey", pch=19)
+points(ozone$ozone, predict(treebag$fits[[1]]$fit, predictors), pch=19, col="red")
+points(ozone$ozone, predict(treebag, predictors), pch=19, col="blue")
+```
+
+The grey dots represent the observed values; the red dots are fits from a single conditional regression tree. Note how these do not capture the upward trend very well. Averaging over ten model fits with these regression trees shows the trend (blue)
+
+### Random Forests
+
+An extension of bagging. We take a resample of the data set, and at each split, we also bootstrap the variables. It allows us to grow a large number of trees. It is very accurate, but it it slow, and can be difficult to interpret
+
+example Iris data
+```{r}
+set.seed(333)
+inTrain<-createDataPartition(y = iris$Species, p = 0.7, list = F)
+training<-iris[inTrain, ]
+testing<-iris[-inTrain, ]
+modFit<-train(Species~., method = "rf", data = training, proximity = T)
+modFit
+```
+
+Obtain the second tree that was produced with getTree()
+
+```{r}
+getTree(modFit$finalModel, k = 2)
+```
+
+Obtain the center predictions of the classes
+```{r}
+irisP<-as.data.frame(
+        classCenter(x = training[, c(3, 4)], 
+                    label = training$Species,
+                    prox = modFit$finalModel$proximity)
+        )
+irisP$Species<-rownames(irisP)
+p<-qplot(x = Petal.Width, y = Petal.Length, data = training, col = Species)
+p +geom_point(aes(x = Petal.Width, y = Petal.Length, col=Species), size = 5, shape =4, data = irisP)
+```
+
+Predict new values
+```{r}
+pred<-predict(object = modFit, newdata = testing)
+# check to see if the prediction is correct
+predRight<-pred == testing$Species
+table(pred, testing$Species)
+```
+
+We missed two; to see which these were, 
+```{r}
+qplot(Petal.Width, Petal.Length, colour = predRight, data = testing)
+```
+
+
+### Boosting
+
+Take a large number of possibly weak predictors, weight them and add them up to get a stronger predictor. We could take all possible trees, or all possible regression models, etc. 
+
+Example: Wage
+```{r, message=FALSE, warning=FALSE}
+data(Wage)
+Wage<-subset(Wage, select = -c(logwage))
+set.seed(333)
+inTrain<-createDataPartition(y = iris$Species, p = 0.7, list = F)
+training<-Wage[inTrain,]
+testing<-Wage[-inTrain, ]
+# use boosting with trees, and suppress output with verbose = F
+modFit<-train(wage~., method = "gbm", data=training, verbose =F)
+modFit
+```
+
+Visualizing the results
+
+```{r}
+qplot(x = predict(object = modFit, newdata = testing), y = wage, data = testing)
+```
