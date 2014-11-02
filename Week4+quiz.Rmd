@@ -1,0 +1,352 @@
+---
+title: "Week 4 notes + quiz"
+author: "Varun Boodram"
+date: "October 31, 2014"
+output: html_document
+---
+
+### Regression basic idea
+
+* Fit a regression model
+* Penalize (ie shrink) the large coefficients
+This can help with the bias variance trade-off (if certain variables are highly correlated, we won't want to include them both in the regression model). This improves variance, and reduces the prediction error. However it may be computationally demanding. 
+
+### Question 3
+
+Load the concrete data with the commands:
+```{r}
+library(caret)
+set.seed(3523)
+library(AppliedPredictiveModeling)
+data(concrete)
+inTrain = createDataPartition(concrete$CompressiveStrength, p = 3/4)[[1]]
+training = concrete[ inTrain,]
+testing = concrete[-inTrain,]
+```
+Set the seed to 233 and fit a lasso model to predict Compressive Strength. Which variable is the last coefficient to be set to zero as the penalty increases? (Hint: it may be useful to look up ?plot.enet).
+
+```{r}
+set.seed(233)
+fit<-train(CompressiveStrength ~., method = "lasso", data = training)
+plot.enet(fit$finalModel, xvar = "penalty", use.color = TRUE)
+```
+In the plot, each colored line represents the value taken by a different coefficient in your model. Lambda is the weight given to the regularization term (the L1 norm), so as lambda approaches zero, the loss function of your model approaches the OLS loss function. Here's one way you could specify the LASSO loss function to make this concrete:
+$$\beta_{lasso}=argmin [RSS(\beta)+\lambda∗L1-Norm(\beta)]$$
+Therefore, when lambda is very small, the LASSO solution should be very close to the OLS solution, and all of your coefficients are in the model. As lambda grows, the regularization term has greater effect and you will see fewer variables in your model (because more and more coefficients will be zero valued).
+
+My assumption is that the right-hand tick marks refer to the coeficients in order (black is cement, blue is water). The last coeficient to join the horizontal line is cement. 
+
+### Question 1
+
+Load the vowel.train and vowel.test data sets:
+```{r}
+library(ElemStatLearn)
+data(vowel.train)
+data(vowel.test) 
+```
+
+Set the variable y to be a factor variable in both the training and test set. Then set the seed to 33833. Fit (1) a random forest predictor relating the factor variable y to the remaining variables and (2) a boosted predictor using the "gbm" method. Fit these both with the train() command in the caret package. 
+
+```{r, message=FALSE, warning=FALSE}
+vowel.test$y<-as.factor(vowel.test$y)
+vowel.train$y<-as.factor(vowel.train$y)
+set.seed(33833)
+fit1<-train(y ~., method = "rf", data = vowel.train, 
+            trControl = trainControl(number = 4, allowParallel = T))
+set.seed(33833)
+fit2<-train(y ~., method = "gbm", data = vowel.train)
+```
+
+What are the accuracies for the two approaches on the test data set? What is the accuracy among the test set samples where the two methods agree?
+
+```{r}
+pred1<-predict(fit1, newdata = vowel.test)
+rfAccuracy<-sum(pred1==vowel.test$y)/length(vowel.test$y)
+rfAccuracy
+pred2<-predict(object = fit2, newdata = vowel.test)
+gbmAccuracy<-sum(pred2==vowel.test$y)/length(vowel.test$y)
+gbmAccuracy
+inds<-which(pred1==pred2)
+agreement<-vector(); agreement[inds]<-pred1[inds]; agreement[-inds]<-0
+agreementAccuracy<-sum(agreement==vowel.test$y)/length(vowel.test$y)
+agreementAccuracy
+```
+None of these answers are in agreement with the choices. The closest answers for rf and gbm accuracy is selected
+
+
+### combining predictors (aka enseble methods)
+
+* you can combine methods by averaging or voting
+* combining classifiers improves accuracy, but reduces interpretability
+
+```{r, warning=FALSE, message=FALSE}
+library(ISLR)
+data(Wage)
+library(ggplot2)
+library(caret)
+Wage<-subset(Wage, select=-c(logwage))
+# create a buiding set and a validataion set
+inBuild<-createDataPartition(y=Wage$wage, p = 0.7, list = F)
+validataion<-Wage[-inBuild, ]; buildData<-Wage[inBuild,]
+inTrain<-createDataPartition(y = buildData$wage, p = 0.7, list = F)
+training<-buildData[inTrain,]; testing<-buildData[-inTrain,]
+c(dim(training), dim(testing), dim(validataion))
+
+# build two different models
+mod1<- train(wage ~ ., method = "glm", data = training)
+mod2<-train(wage ~., method = "rf", data = training, trControl = trainControl(method = "cv", number = 3))
+
+# predict on the testing set
+
+pred1<-predict(object = mod1, newdata = testing)
+pred2<-predict(object = mod2, newdata = testing)
+qplot(pred1, pred2, colour =wage, data =testing)
+
+# combine the predictors
+predDF<-data.frame(pred1, pred2, wage=testing$wage)
+comboFit<-train(wage ~ ., method = "gam", data = predDF) #
+comboPred<-predict(object = comboFit, predDF)
+
+# Check errors
+sqrt(sum((pred1-testing$wage)^2))
+sqrt(sum((pred2-testing$wage)^2))
+sqrt(sum((comboPred-testing$wage)^2))
+
+# predicting on the validataion set
+pred1V<-predict(mod1, validataion)
+pred2V<-predict(mod2, validataion)
+predVDF<-data.frame(pred1V, pred2V)
+comboPredV<-predict(comboFit, predVDF)
+```
+
+
+### Question 2
+Load the Alzheimer's data using the following commands
+```{r, message=FALSE}
+library(caret)
+library(gbm)
+set.seed(3433)
+library(AppliedPredictiveModeling)
+data(AlzheimerDisease)
+adData = data.frame(diagnosis,predictors)
+inTrain = createDataPartition(adData$diagnosis, p = 3/4)[[1]]
+training = adData[ inTrain,]
+testing = adData[-inTrain,]
+```
+
+Set the seed to 62433 and predict diagnosis with all the other variables using a random forest ("rf"), boosted trees ("gbm") and linear discriminant analysis ("lda") model. Stack the predictions together using random forests ("rf"). What is the resulting accuracy on the test set? Is it better or worse than each of the individual predictions?
+
+```{r}
+set.seed(62433)
+mod1<-train(diagnosis ~., method = "rf", data = training, trControl = trainControl(number = 4, allowParallel = T))
+set.seed(62433)
+mod2<-train(diagnosis ~., method = "gbm", data = training)
+set.seed(62433)
+mod3<-train(diagnosis ~., method = "lda", data = training)
+
+# predict on the testing set
+
+pred1<-predict(object = mod1, newdata = testing)
+pred1Ac<-sum(pred1==testing$diagnosis)/length(testing$diagnosis)
+pred2<-predict(object = mod2, newdata = testing)
+pred2Ac<-sum(pred2==testing$diagnosis)/length(testing$diagnosis)
+pred3<-predict(object = mod3, newdata = testing)
+pred3Ac<-sum(pred3==testing$diagnosis)/length(testing$diagnosis)
+
+# combine the predictors
+predDF<-data.frame(pred1, pred2, pred3, diagnosis=testing$diagnosis)
+comboFit<-train(diagnosis ~ ., method = "rf", data = predDF) #
+comboPred<-predict(object = comboFit, newdata = testing)
+predCAc<-sum(comboPred==predDF$diagnosis)/length(predDF$diagnosis)
+
+c(predCAc, pred1Ac, pred2Ac, pred3Ac)
+```
+Again, the answer is not among the choices. The closest is 
+
+Stacked Accuracy: 0.79 is better than random forests and lda and the same as boosting.
+
+
+### Forecasting
+
+This is a very specific kind of prediction problem. It is typically applied to time series data. These data are/have
+
+* dependent over time: this makes prediction more challenging than when you have independent examples
+* trends: a specific pattern type where there is a long term increase or decrease
+* seasonal patters: another specific data type where patterns are related to week, season, year...
+* cycles : patterns that rise and fall periodically
+
+Subsampling is more complicated, because we have to take advantage of the fact that time is being sampled
+
+The typical goal of forecasting is to predict one or more observations into the future. All standard prediction algorithms can be used (but with a lot of caution!)
+
+**Beware of spurious correlations**
+
+eg: Google stock data
+
+```{r}
+library(quantmod)
+from.date <- as.Date("01/01/08", format = "%d / %m / %y")
+to.date <- as.Date(x = "31/12/13", format = "%d / %m / %y")
+getSymbols(Symbols = "GOOG", src = "google", from = from.date, to = to.date)
+head(GOOG)
+```
+
+Summarize monthly and store as a time series
+
+```{r}
+df <- GOOG[, 1:4]
+mGoog<-to.monthly(df)
+googOP<-Op(mGoog)
+ts<-ts(data = googOP, frequency = 12)
+plot(ts)
+```
+
+time series decomposition
+
+```{r}
+plot(decompose(x = ts))
+```
+We observe
+
+* there appears to be an upward trend
+* a seasonal pattern
+* a more random cyclical pattern
+
+building training a tests sets require that we have consecutive time points. ```window()``` is a generic function which extracts the subset of the object x observed between the times start and end. 
+
+```{r}
+tsTrain <- window(x = ts, start = 1, end = 5)
+tsTest <- window(x = ts, start = 5, end = 7)
+```
+
+There are several ways to do forecasting. One is a simple moving average 
+$$Y_t=\frac{1}{2k+1}\sum_{j=-k}^{k}y_{t+j}$$
+
+
+```{r}
+library(forecast)
+plot(tsTrain)
+lines(ma(tsTrain, order = 3), col= "red")
+```
+
+You can also do exponential smoothing which you have to look up. 
+```{r}
+# ets {forecast}
+smoothed <- ets(y = tsTrain, model = "MMM")
+# forecast is a generic function for forecasting from time series or time series models. The function invokes particular methods which depend on the class of the first argument.
+fcast<-forecast(object = smoothed)
+plot(fcast)
+lines(tsTest, col = "red")
+```
+```accuracy()``` Returns range of summary measures of the forecast accuracy. 
+```{r}
+accuracy(f = fcast, x = tsTest)
+```
+
+### Question 4
+Load the data on the number of visitors to the instructors blog from here: 
+
+```{r}
+fileURL<-"https://d396qusza40orc.cloudfront.net/predmachlearn/gaData.csv"
+if(!file.exists("~/Desktop/gaData.csv")){
+        download.file(url = fileURL, destfile = "~/Desktop/gaData.csv", method = "curl")
+}
+```
+
+Using the commands:
+```{r}
+library(lubridate)  # For year() function below
+dat = read.csv("~/Desktop/gaData.csv")
+training = dat[year(dat$date) < 2012,]
+testing = dat[(year(dat$date)) > 2011,]
+tstrain = ts(training$visitsTumblr)
+```
+Fit a model using the bats() function in the forecast package to the training time series. 
+
+```{r}
+#fit the model
+fit<-bats(y = tsTrain)
+```
+
+Then forecast this model for the remaining time points. 
+```{r}
+# forecast with a 95% ci
+fcast<-forecast(object = fit, level = 95); fcast
+# test accuracy
+accuracy(f = fcast, x = training$visitsTumblr)
+```
+For how many of the testing points is the true value within the 95% prediction interval bounds? *I don't know how to do this. THE CORRECT ANSWER IS 96%*
+
+
+### Unsupervised Learning
+Sometimes you won't know the labels for prediction, and need to discover those in advance. To build a predictor
+
+* create clusters
+* name clusters
+* build predictor for clusters
+
+from this, we predict clusters in the new data set. 
+
+eg: Iris, ignoring species labels
+
+```{r}
+data(iris)
+inTrain <- createDataPartition(y = iris$Species, p = 0.7, list = F)
+training <- iris[inTrain,]; testing <- iris[-inTrain,]
+dims<-c(dim(training), dim(testing)); dims
+```
+
+Performa a k-means clustering
+
+```{r}
+# ignore species variable
+kMeans <- kmeans(subset(training, select = -c(Species)), centers = 3)
+str(kMeans)
+training$clusters <- as.factor(kMeans$cluster)
+qplot(x = Petal.Width, y = Petal.Length, data = training, colour = clusters)
+```
+
+Table the cluster vs. Species
+```{r}
+table(kMeans$cluster, training$Species)
+```
+
+Cluster 2 corresponds to Setosa, 3 to versicolor, 1 to virginica. In general, we wouldn't know what the names were, and would have to invent some. 
+
+Now we build a model that relates the clusters that we just assiged to ```training$clusters``` to all the other variables in the training set (again, ignoring Species)
+
+```{r}
+fit<-train(clusters ~ ., method = "rpart", data = subset(training, select = -c(Species)))
+```
+
+Do a prediction in the training set
+
+```{r}
+table(predict(object = fit, newdata = training), training$Species)
+```
+
+Apply to the testing data set
+
+```{r}
+table(predict(object = fit, newdata = testing), testing$Species)
+```
+
+### Question 5
+Load the concrete data with the commands:
+```{r}
+set.seed(3523)
+library(AppliedPredictiveModeling)
+data(concrete)
+inTrain = createDataPartition(concrete$CompressiveStrength, p = 3/4)[[1]]
+training = concrete[ inTrain,]
+testing = concrete[-inTrain,]
+```
+Set the seed to 325 and fit a support vector machine using the e1071 package to predict Compressive Strength using the default settings. Predict on the testing set. What is the RMSE?
+
+```{r}
+require(e1071)
+set.seed(325)
+fit<-svm(CompressiveStrength ~., data = training )
+pred<-predict(fit, testing)
+accuracy(f = pred, x = testing$CompressiveStrength)
+```
